@@ -4,12 +4,19 @@ Fast, snapshot-based checkpoints for entire codebase. No branches, no staging, n
 
 ## Install
 
-Requires: Zig 0.15+, libzstd
+```
+brew install kaxing/checkpoint/check
+```
+
+### From source
 
 ```
+git clone https://github.com/kaxing/checkpoint
+cd checkpoint
 make install    # installs to /usr/local/bin/check
-make uninstall
 ```
+
+Requires: Zig 0.15+
 
 ## Usage
 
