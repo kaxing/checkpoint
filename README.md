@@ -6,6 +6,7 @@ Fast, snapshot-based checkpoints for entire codebase. No branches, no staging, n
 
 ```
 brew install kaxing/checkpoint/check
+// uninstall: brew uninstall check
 ```
 
 ### From source
@@ -14,6 +15,7 @@ brew install kaxing/checkpoint/check
 git clone https://github.com/kaxing/checkpoint
 cd checkpoint
 make install    # installs to /usr/local/bin/check
+// uninstall: make uninstall
 ```
 
 Requires: Zig 0.15+
