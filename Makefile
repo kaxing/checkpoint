@@ -1,4 +1,4 @@
-.PHONY: build install uninstall test test-multiarch bench clean
+.PHONY: build install uninstall test test-multiarch bench release clean
 
 build:
 	zig build -Doptimize=ReleaseFast
@@ -21,5 +21,16 @@ bench: build
 	zig build-exe bench/main.zig --name bench-runner -OReleaseFast && ./bench-runner && rm -f bench-runner bench-runner.o
 	bash bench/vs_git.sh
 
+release:
+	rm -rf release && mkdir release
+	zig build -Doptimize=ReleaseFast -Dtarget=aarch64-macos
+	tar -czf release/check-macos-arm64.tar.gz -C zig-out/bin check
+	zig build -Doptimize=ReleaseFast -Dtarget=x86_64-macos
+	tar -czf release/check-macos-x86_64.tar.gz -C zig-out/bin check
+	zig build -Doptimize=ReleaseFast -Dtarget=aarch64-linux
+	tar -czf release/check-linux-arm64.tar.gz -C zig-out/bin check
+	zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux
+	tar -czf release/check-linux-x86_64.tar.gz -C zig-out/bin check
+
 clean:
-	rm -rf zig-out .zig-cache bench-runner bench-runner.o
+	rm -rf zig-out .zig-cache bench-runner bench-runner.o release

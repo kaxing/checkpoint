@@ -14,7 +14,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    exe.linkSystemLibrary("zstd");
+    const zstd_dep = b.dependency("zstd", .{ .target = target, .optimize = optimize });
+    exe.linkLibrary(zstd_dep.artifact("zstd"));
 
     b.installArtifact(exe);
 
@@ -35,7 +36,7 @@ pub fn build(b: *std.Build) void {
     tree_module.addImport("hash.zig", hash_mod);
 
     const compress_mod = b.createModule(.{ .root_source_file = b.path("src/compress.zig"), .link_libc = true, .target = target });
-    compress_mod.linkSystemLibrary("zstd", .{});
+    compress_mod.linkLibrary(zstd_dep.artifact("zstd"));
 
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
