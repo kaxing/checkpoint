@@ -52,7 +52,7 @@ mkdir -p sub
 echo "nested" > sub/deep.txt
 
 OUT=$($CHECK 2>&1)
-assert_contains "$OUT" "saved #1" "save first snapshot"
+assert_contains "$OUT" "checkpoint #1" "create first checkpoint"
 
 # modify files
 echo "changed" > file.txt
@@ -156,7 +156,7 @@ assert_contains "$OUT" "undone to #2" "undo message"
 assert_eq "$(cat f.txt)" "v2" "undo restores previous content"
 
 # ============================================================
-echo "=== Undo with single snapshot ==="
+echo "=== Undo with single checkpoint ==="
 # ============================================================
 
 DIR=$(new_test_dir)
@@ -164,7 +164,7 @@ cd "$DIR"
 echo "only" > f.txt
 $CHECK >/dev/null 2>&1
 
-assert_exit_fail "cd $DIR && $CHECK undo" "undo with single snapshot fails"
+assert_exit_fail "cd $DIR && $CHECK undo" "undo with single checkpoint fails"
 
 # ============================================================
 echo "=== List --recent ==="
@@ -212,9 +212,9 @@ OUT=$($CHECK list 2>&1)
 assert_contains "$OUT" "snap5" "cleanup keeps snap5"
 assert_contains "$OUT" "snap4" "cleanup keeps snap4"
 if echo "$OUT" | grep -qF "snap3"; then
-    fail "cleanup removes old snapshots" "snap3 still listed"
+    fail "cleanup removes old checkpoints" "snap3 still listed"
 else
-    pass "cleanup removes old snapshots"
+    pass "cleanup removes old checkpoints"
 fi
 
 # ============================================================
@@ -276,7 +276,7 @@ assert_eq "$(cat a/b/c/d/file.txt)" "deep" "restore deep nested file"
 assert_eq "$(cat a/b/mid.txt)" "mid" "restore mid nested file"
 
 # ============================================================
-echo "=== Multiple snapshots restore ==="
+echo "=== Multiple checkpoints restore ==="
 # ============================================================
 
 DIR=$(new_test_dir)

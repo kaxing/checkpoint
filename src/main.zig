@@ -5,14 +5,14 @@ const manifest_mod = @import("manifest.zig");
 const VERSION = "0.0.1";
 
 const USAGE =
-    \\check                       save snapshot
-    \\check --note "message"      save snapshot with a note
-    \\check undo                  restore previous snapshot
-    \\check restore [id]          restore to snapshot (default: latest)
+    \\check                       create checkpoint
+    \\check --note "message"      create checkpoint with a note
+    \\check undo                  restore previous checkpoint
+    \\check restore [id]          restore to checkpoint (default: latest)
     \\check diff [id]             show added/removed/modified files
     \\check diff [id] <path>      show content diff for one file
-    \\check list [--recent N]     show all (or last N) snapshots
-    \\check cleanup --keep N      delete all but last N snapshots
+    \\check list [--recent N]     show all (or last N) checkpoints
+    \\check cleanup --keep N      delete all but last N checkpoints
     \\
 ;
 
@@ -83,7 +83,7 @@ pub fn main() !void {
 
     if (std.mem.eql(u8, command, "cleanup")) {
         const flag = args.next() orelse {
-            fatal("check cleanup --keep N required (prevents deleting all snapshots)", .{});
+            fatal("check cleanup --keep N required (prevents deleting all checkpoints)", .{});
         };
         if (!std.mem.eql(u8, flag, "--keep")) fatal("usage: check cleanup --keep N", .{});
         const val = args.next() orelse fatal("--keep requires a number", .{});
@@ -120,9 +120,9 @@ fn doSave(allocator: std.mem.Allocator, name: ?[]const u8) void {
             defer r2.deinit();
             const id = r2.save(name) catch |e| fatal("save failed: {}", .{e});
             if (name) |n| {
-                out("saved #{d} \"{s}\"\n", .{ id, n });
+                out("checkpoint #{d} \"{s}\"\n", .{ id, n });
             } else {
-                out("saved #{d}\n", .{id});
+                out("checkpoint #{d}\n", .{id});
             }
             return;
         }
@@ -131,9 +131,9 @@ fn doSave(allocator: std.mem.Allocator, name: ?[]const u8) void {
     defer r.deinit();
     const id = r.save(name) catch |e| fatal("save failed: {}", .{e});
     if (name) |n| {
-        out("saved #{d} \"{s}\"\n", .{ id, n });
+        out("checkpoint #{d} \"{s}\"\n", .{ id, n });
     } else {
-        out("saved #{d}\n", .{id});
+        out("checkpoint #{d}\n", .{id});
     }
 }
 
@@ -146,8 +146,8 @@ fn doUndo(allocator: std.mem.Allocator) void {
     };
     defer r.deinit();
     const head = manifest_mod.readHead(r.cp_dir) catch fatal("failed to read HEAD", .{});
-    const head_id = head orelse fatal("no snapshots to undo", .{});
-    if (head_id < 2) fatal("no previous snapshot to undo to", .{});
+    const head_id = head orelse fatal("no checkpoints to undo", .{});
+    if (head_id < 2) fatal("no previous checkpoint to undo to", .{});
     const prev_id = head_id - 1;
     r.restore(prev_id) catch |e| fatal("undo failed: {}", .{e});
     out("undone to #{d}\n", .{prev_id});
@@ -181,7 +181,7 @@ fn doDiff(allocator: std.mem.Allocator, id: ?u32, path: ?[]const u8) void {
     // Resolve which snapshot we're comparing against
     const resolved_id = if (id) |i| i else blk: {
         const head = manifest_mod.readHead(r.cp_dir) catch fatal("failed to read HEAD", .{});
-        break :blk head orelse fatal("no snapshots", .{});
+        break :blk head orelse fatal("no checkpoints", .{});
     };
 
     var result = r.diff(resolved_id) catch |e| fatal("diff failed: {}", .{e});
@@ -250,7 +250,7 @@ fn doList(allocator: std.mem.Allocator, recent: ?u32) void {
     }
 
     if (manifests.len == 0) {
-        out("no snapshots\n", .{});
+        out("no checkpoints\n", .{});
         return;
     }
 
@@ -290,7 +290,7 @@ fn doCleanup(allocator: std.mem.Allocator, keep: u32) void {
     if (deleted == 0) {
         out("nothing to clean up\n", .{});
     } else {
-        out("removed {d} snapshots, kept last {d}\n", .{ deleted, keep });
+        out("removed {d} checkpoints, kept last {d}\n", .{ deleted, keep });
     }
 }
 

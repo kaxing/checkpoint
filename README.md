@@ -23,14 +23,14 @@ Requires: Zig 0.15+
 ## Usage
 
 ```
-check                       save snapshot
-check --note "message"      save with a note
-check undo                  restore previous snapshot
-check restore [id]          restore to snapshot
+check                       create checkpoint
+check --note "message"      create checkpoint with a note
+check undo                  restore previous checkpoint
+check restore [id]          restore to checkpoint
 check diff [id]             show changed files
 check diff [id] <path>      show content diff for a file
-check list [--recent N]     list snapshots
-check cleanup --keep N      delete all but last N snapshots
+check list [--recent N]     list checkpoints
+check cleanup --keep N      delete all but last N checkpoints
 check version               show version
 ```
 
