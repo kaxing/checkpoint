@@ -1,13 +1,13 @@
-# check
+# Checkpoint — the `check` command you don't know you need
 
-Fast, snapshot-based checkpoints for directories. No branches, no staging, no merge conflicts.
+Fast, snapshot-based checkpoints for entire codebase. No branches, no staging, no merge conflicts.
 
 ## Install
 
 Requires: Zig 0.15+, libzstd
 
 ```
-make install
+make install    # installs to /usr/local/bin/check
 make uninstall
 ```
 

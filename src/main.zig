@@ -102,7 +102,7 @@ pub fn main() !void {
         return;
     }
 
-    out("{s}", .{USAGE});
+    fatal("unknown command: {s} — run 'check help' for usage", .{command});
 }
 
 fn openCwd() std.fs.Dir {
