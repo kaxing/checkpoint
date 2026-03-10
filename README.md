@@ -25,12 +25,13 @@ Requires: Zig 0.15+
 ```
 check                       create checkpoint
 check --note "message"      create checkpoint with a note
-check undo                  restore previous checkpoint
-check restore [id]          restore to checkpoint
-check diff [id]             show changed files
-check diff [id] <path>      show content diff for a file
-check list [--recent N]     list checkpoints
-check cleanup --keep N      delete all but last N checkpoints
+check rollback [id]         rollback to checkpoint (default: latest)
+check diff [id]             show added/removed/modified files
+check diff [id] <path>      show content diff for one file
+check list [--recent N]     show all (or last N) checkpoints
+check remove <id>           remove a checkpoint
+check remove --keep N       delete all but last N
+check remove all            remove all checkpoints
 check version               show version
 ```
 

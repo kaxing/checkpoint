@@ -2,17 +2,19 @@ const std = @import("std");
 const repo_mod = @import("repo.zig");
 const manifest_mod = @import("manifest.zig");
 
-const VERSION = "0.0.1";
+const VERSION = "0.0.2";
 
 const USAGE =
     \\check                       create checkpoint
     \\check --note "message"      create checkpoint with a note
-    \\check undo                  restore previous checkpoint
-    \\check restore [id]          restore to checkpoint (default: latest)
+    \\check rollback [id]         rollback to checkpoint (default: latest)
     \\check diff [id]             show added/removed/modified files
     \\check diff [id] <path>      show content diff for one file
     \\check list [--recent N]     show all (or last N) checkpoints
-    \\check cleanup --keep N      delete all but last N checkpoints
+    \\check remove <id>           remove a checkpoint
+    \\check remove --keep N       delete all but last N
+    \\check remove all            remove all checkpoints
+    \\check version               show version
     \\
 ;
 
@@ -53,13 +55,29 @@ pub fn main() !void {
         return doSave(allocator, note);
     }
 
-    if (std.mem.eql(u8, command, "undo")) {
-        return doUndo(allocator);
+    if (std.mem.eql(u8, command, "rollback")) {
+        const id = parseOptionalId(args.next());
+        return doRollback(allocator, id);
     }
 
-    if (std.mem.eql(u8, command, "restore")) {
-        const id = parseOptionalId(args.next());
-        return doRestore(allocator, id);
+    if (std.mem.eql(u8, command, "remove")) {
+        const next = args.next() orelse {
+            out("check remove <id>         remove a checkpoint\n", .{});
+            out("check remove --keep N     delete all but last N\n", .{});
+            out("check remove all          remove all checkpoints\n", .{});
+            return;
+        };
+        if (std.mem.eql(u8, next, "all")) {
+            return doRemoveAll(allocator);
+        }
+        if (std.mem.eql(u8, next, "--keep")) {
+            const val = args.next() orelse fatal("--keep requires a number", .{});
+            const keep = std.fmt.parseInt(u32, val, 10) catch fatal("--keep requires a number", .{});
+            if (keep == 0) fatal("--keep must be at least 1", .{});
+            return doCleanup(allocator, keep);
+        }
+        const id = std.fmt.parseInt(u32, next, 10) catch fatal("check remove <id> — id must be a number", .{});
+        return doRemove(allocator, id);
     }
 
     if (std.mem.eql(u8, command, "diff")) {
@@ -81,19 +99,9 @@ pub fn main() !void {
         return doList(allocator, recent);
     }
 
-    if (std.mem.eql(u8, command, "cleanup")) {
-        const flag = args.next() orelse {
-            fatal("check cleanup --keep N required (prevents deleting all checkpoints)", .{});
-        };
-        if (!std.mem.eql(u8, flag, "--keep")) fatal("usage: check cleanup --keep N", .{});
-        const val = args.next() orelse fatal("--keep requires a number", .{});
-        const keep = std.fmt.parseInt(u32, val, 10) catch fatal("--keep requires a number", .{});
-        if (keep == 0) fatal("--keep must be at least 1", .{});
-        return doCleanup(allocator, keep);
-    }
 
     if (std.mem.eql(u8, command, "version") or std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "-v")) {
-        out("check {s}\n", .{VERSION});
+        out("v{s}\n", .{VERSION});
         return;
     }
 
@@ -137,7 +145,7 @@ fn doSave(allocator: std.mem.Allocator, name: ?[]const u8) void {
     }
 }
 
-fn doUndo(allocator: std.mem.Allocator) void {
+fn doRollback(allocator: std.mem.Allocator, id: ?u32) void {
     var cwd = openCwd();
     defer cwd.close();
     var r = repo_mod.Repo.open(allocator, cwd) catch |err| {
@@ -145,15 +153,84 @@ fn doUndo(allocator: std.mem.Allocator) void {
         fatal("failed to open repo: {}", .{err});
     };
     defer r.deinit();
-    const head = manifest_mod.readHead(r.cp_dir) catch fatal("failed to read HEAD", .{});
-    const head_id = head orelse fatal("no checkpoints to undo", .{});
-    if (head_id < 2) fatal("no previous checkpoint to undo to", .{});
-    const prev_id = head_id - 1;
-    r.restore(prev_id) catch |e| fatal("undo failed: {}", .{e});
-    out("undone to #{d}\n", .{prev_id});
+
+    // Resolve target before auto-saving
+    const target_id = id orelse blk: {
+        const head = manifest_mod.readHead(r.cp_dir) catch fatal("failed to read HEAD", .{});
+        break :blk head orelse fatal("no checkpoints found", .{});
+    };
+
+    // Remove any existing <auto> checkpoint (unless it's our target)
+    removeAutoCheckpoint(allocator, &r, target_id);
+
+    // Auto-save current state
+    const auto_id = r.save("<auto>") catch |e| fatal("failed to save current state: {}", .{e});
+
+    // Check if <auto> duplicates an existing checkpoint (smart auto)
+    const auto_m = manifest_mod.read(allocator, r.manifests_dir, auto_id) catch {
+        // Can't read back — keep it and move on
+        out("checkpoint #{d} \"<auto>\"\n", .{auto_id});
+        r.restore(target_id) catch |e| fatal("rollback failed: {}", .{e});
+        if (id) |_| out("rolled back to #{d}\n", .{target_id}) else out("rolled back to latest\n", .{});
+        return;
+    };
+    defer if (auto_m.name.len > 0) allocator.free(auto_m.name);
+
+    const is_dup = blk: {
+        const manifests = r.list() catch break :blk false;
+        defer {
+            for (manifests) |m| if (m.name.len > 0) allocator.free(m.name);
+            allocator.free(manifests);
+        }
+        for (manifests) |m| {
+            if (m.id == auto_id) continue;
+            if (std.mem.eql(u8, &m.tree_hash, &auto_m.tree_hash)) break :blk true;
+        }
+        break :blk false;
+    };
+
+    if (is_dup) {
+        // Current state already exists as a checkpoint — remove <auto>
+        var name_buf: [32]u8 = undefined;
+        const filename = std.fmt.bufPrint(&name_buf, "{d}.manifest", .{auto_id}) catch unreachable;
+        r.manifests_dir.deleteFile(filename) catch {};
+        // Restore HEAD to previous value
+        if (auto_id > 1) manifest_mod.writeHead(r.cp_dir, auto_id - 1) catch {};
+    } else {
+        out("checkpoint #{d} \"<auto>\"\n", .{auto_id});
+    }
+
+    r.restore(target_id) catch |e| fatal("rollback failed: {}", .{e});
+    if (id) |_| {
+        out("rolled back to #{d}\n", .{target_id});
+    } else {
+        out("rolled back to latest\n", .{});
+    }
 }
 
-fn doRestore(allocator: std.mem.Allocator, id: ?u32) void {
+fn removeAutoCheckpoint(allocator: std.mem.Allocator, r: *repo_mod.Repo, skip_id: u32) void {
+    const manifests = r.list() catch return;
+    defer {
+        for (manifests) |m| if (m.name.len > 0) allocator.free(m.name);
+        allocator.free(manifests);
+    }
+    for (manifests) |m| {
+        if (m.id == skip_id) continue;
+        if (std.mem.eql(u8, m.name, "<auto>")) {
+            var name_buf: [32]u8 = undefined;
+            const filename = std.fmt.bufPrint(&name_buf, "{d}.manifest", .{m.id}) catch continue;
+            r.manifests_dir.deleteFile(filename) catch {};
+            // Update HEAD if this was the latest
+            const head = manifest_mod.readHead(r.cp_dir) catch continue;
+            if (head) |h| {
+                if (h == m.id and m.id > 1)
+                    manifest_mod.writeHead(r.cp_dir, m.id - 1) catch {};
+            }
+        }
+    }
+}
+
+fn doRemove(allocator: std.mem.Allocator, id: u32) void {
     var cwd = openCwd();
     defer cwd.close();
     var r = repo_mod.Repo.open(allocator, cwd) catch |err| {
@@ -161,12 +238,36 @@ fn doRestore(allocator: std.mem.Allocator, id: ?u32) void {
         fatal("failed to open repo: {}", .{err});
     };
     defer r.deinit();
-    r.restore(id) catch |e| fatal("restore failed: {}", .{e});
-    if (id) |i| {
-        out("restored #{d}\n", .{i});
-    } else {
-        out("restored to latest\n", .{});
+
+    // Check manifest exists
+    _ = manifest_mod.read(allocator, r.manifests_dir, id) catch |err| {
+        if (err == error.FileNotFound) fatal("checkpoint #{d} not found", .{id});
+        fatal("failed to read checkpoint #{d}: {}", .{ id, err });
+    };
+
+    // Delete the manifest file
+    var name_buf: [32]u8 = undefined;
+    const filename = std.fmt.bufPrint(&name_buf, "{d}.manifest", .{id}) catch unreachable;
+    r.manifests_dir.deleteFile(filename) catch |e| fatal("failed to remove checkpoint #{d}: {}", .{ id, e });
+
+    // If this was HEAD, update HEAD to previous existing manifest
+    const head = manifest_mod.readHead(r.cp_dir) catch null;
+    if (head) |h| {
+        if (h == id) {
+            var prev = id;
+            while (prev > 1) {
+                prev -= 1;
+                var check_buf: [32]u8 = undefined;
+                const check_name = std.fmt.bufPrint(&check_buf, "{d}.manifest", .{prev}) catch continue;
+                if (r.manifests_dir.statFile(check_name)) |_| {
+                    manifest_mod.writeHead(r.cp_dir, prev) catch {};
+                    break;
+                } else |_| continue;
+            }
+        }
     }
+
+    out("removed #{d}\n", .{id});
 }
 
 fn doDiff(allocator: std.mem.Allocator, id: ?u32, path: ?[]const u8) void {
@@ -201,7 +302,7 @@ fn doDiff(allocator: std.mem.Allocator, id: ?u32, path: ?[]const u8) void {
         defer if (current) |c| allocator.free(c);
 
         if (old_content == null and current == null) {
-            out("{s}: not found in snapshot or working tree\n", .{p});
+            out("{s}: not found in snapshot or current\n", .{p});
             return;
         }
 
@@ -214,13 +315,13 @@ fn doDiff(allocator: std.mem.Allocator, id: ?u32, path: ?[]const u8) void {
         }
 
         out("--- #{d} {s}\n", .{ resolved_id, p });
-        out("+++ working tree {s}\n", .{p});
+        out("+++ current {s}\n", .{p});
         printSimpleDiff(allocator, old_text, new_text);
         return;
     }
 
     // Header: which snapshot
-    out("diff working tree vs #{d}\n", .{resolved_id});
+    out("diff current vs #{d}\n", .{resolved_id});
 
     if (result.added.len == 0 and result.removed.len == 0 and result.modified.len == 0) {
         out("no changes\n", .{});
@@ -292,6 +393,51 @@ fn doCleanup(allocator: std.mem.Allocator, keep: u32) void {
     } else {
         out("removed {d} checkpoints, kept last {d}\n", .{ deleted, keep });
     }
+}
+
+fn doRemoveAll(allocator: std.mem.Allocator) void {
+    var cwd = openCwd();
+    defer cwd.close();
+    var r = repo_mod.Repo.open(allocator, cwd) catch |err| {
+        if (err == error.NotInitialized) fatal("no checkpoints found", .{});
+        fatal("failed to open repo: {}", .{err});
+    };
+    defer r.deinit();
+
+    const manifests = r.list() catch |e| fatal("list failed: {}", .{e});
+    defer {
+        for (manifests) |m| if (m.name.len > 0) allocator.free(m.name);
+        allocator.free(manifests);
+    }
+
+    if (manifests.len == 0) {
+        out("no checkpoints to remove\n", .{});
+        return;
+    }
+
+    out("remove all {d} checkpoints? [y/N] ", .{manifests.len});
+
+    var buf: [16]u8 = undefined;
+    const n = std.posix.read(std.posix.STDIN_FILENO, &buf) catch fatal("failed to read input", .{});
+    if (n == 0) fatal("aborted", .{});
+    const answer = std.mem.trimRight(u8, buf[0..n], "\n\r \t");
+    if (!std.mem.eql(u8, answer, "y") and !std.mem.eql(u8, answer, "Y")) {
+        out("aborted\n", .{});
+        return;
+    }
+
+    for (manifests) |m| {
+        var name_buf: [32]u8 = undefined;
+        const filename = std.fmt.bufPrint(&name_buf, "{d}.manifest", .{m.id}) catch continue;
+        r.manifests_dir.deleteFile(filename) catch {};
+    }
+
+    // Remove pack and HEAD
+    r.cp_dir.deleteFile("HEAD") catch {};
+    r.cp_dir.deleteFile("pack.dat") catch {};
+    r.cp_dir.deleteFile("pack.idx") catch {};
+
+    out("removed all {d} checkpoints\n", .{manifests.len});
 }
 
 fn formatTimestamp(unix: u64) [16]u8 {

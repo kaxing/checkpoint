@@ -26,8 +26,6 @@ pub const Walker = struct {
 
         // Load .gitignore
         w.loadIgnoreFile(root, ".gitignore") catch {};
-        // Load .checkignore
-        w.loadIgnoreFile(root, ".checkignore") catch {};
 
         return w;
     }

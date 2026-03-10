@@ -42,7 +42,7 @@ assert_file_eq() {
 }
 
 # ============================================================
-echo "=== Basic save & restore ==="
+echo "=== Basic save & rollback ==="
 # ============================================================
 
 DIR=$(new_test_dir)
@@ -59,10 +59,10 @@ echo "changed" > file.txt
 echo "new" > added.txt
 rm sub/deep.txt
 
-$CHECK restore 1 2>&1 >/dev/null
-assert_eq "$(cat file.txt)" "hello" "restore file content"
-assert_eq "$(cat sub/deep.txt)" "nested" "restore nested file"
-[ ! -f added.txt ] && pass "restore removes added file" || fail "restore removes added file" "added.txt still exists"
+$CHECK rollback 1 2>&1 >/dev/null
+assert_eq "$(cat file.txt)" "hello" "rollback file content"
+assert_eq "$(cat sub/deep.txt)" "nested" "rollback nested file"
+[ ! -f added.txt ] && pass "rollback removes added file" || fail "rollback removes added file" "added.txt still exists"
 
 # ============================================================
 echo "=== Save with --note ==="
@@ -83,10 +83,10 @@ echo "=== Version ==="
 # ============================================================
 
 OUT=$($CHECK version 2>&1)
-assert_contains "$OUT" "check " "version output"
+assert_contains "$OUT" "v0." "version output"
 
 OUT=$($CHECK --version 2>&1)
-assert_contains "$OUT" "check " "--version flag"
+assert_contains "$OUT" "v0." "--version flag"
 
 # ============================================================
 echo "=== Help ==="
@@ -95,8 +95,8 @@ echo "=== Help ==="
 OUT=$($CHECK --help 2>&1)
 assert_contains "$OUT" "check" "help output"
 assert_contains "$OUT" "--note" "help mentions --note"
-assert_contains "$OUT" "undo" "help mentions undo"
-assert_contains "$OUT" "cleanup" "help mentions cleanup"
+assert_contains "$OUT" "rollback" "help mentions rollback"
+assert_contains "$OUT" "remove" "help mentions remove"
 
 # ============================================================
 echo "=== Diff (file list) ==="
@@ -114,7 +114,7 @@ echo "brand_new" > added.txt
 rm remove.txt
 
 OUT=$($CHECK diff 2>&1)
-assert_contains "$OUT" "diff working tree vs #1" "diff header"
+assert_contains "$OUT" "diff current vs #1" "diff header"
 assert_contains "$OUT" "+ added.txt" "diff shows added"
 assert_contains "$OUT" "- remove.txt" "diff shows removed"
 assert_contains "$OUT" "~ modify.txt" "diff shows modified"
@@ -125,7 +125,7 @@ echo "=== Diff (file content) ==="
 
 OUT=$($CHECK diff 1 modify.txt 2>&1)
 assert_contains "$OUT" "--- #1 modify.txt" "content diff header old"
-assert_contains "$OUT" "+++ working tree modify.txt" "content diff header new"
+assert_contains "$OUT" "+++ current modify.txt" "content diff header new"
 assert_contains "$OUT" "-old" "content diff shows removed line"
 assert_contains "$OUT" "+modified" "content diff shows added line"
 
@@ -139,7 +139,94 @@ OUT=$($CHECK diff 1 added.txt 2>&1)
 assert_contains "$OUT" "+brand_new" "diff new file shows added"
 
 # ============================================================
-echo "=== Undo ==="
+echo "=== Rollback auto-saves <auto> ==="
+# ============================================================
+
+DIR=$(new_test_dir)
+cd "$DIR"
+echo "v1" > f.txt
+$CHECK --note "snap1" >/dev/null 2>&1
+echo "v2" > f.txt
+$CHECK --note "snap2" >/dev/null 2>&1
+echo "v3-unsaved" > f.txt
+
+# Rollback to #1 should auto-save current state
+OUT=$($CHECK rollback 1 2>&1)
+assert_contains "$OUT" "<auto>" "rollback auto-saves <auto>"
+assert_contains "$OUT" "rolled back to #1" "rollback message"
+assert_eq "$(cat f.txt)" "v1" "rollback restores content"
+
+# The <auto> checkpoint should be in the list
+OUT=$($CHECK list 2>&1)
+assert_contains "$OUT" "<auto>" "list shows <auto> checkpoint"
+
+# Can rollback to <auto> to get unsaved state back
+AUTO_ID=$(echo "$OUT" | grep '<auto>' | head -1 | sed 's/#\([0-9]*\).*/\1/')
+$CHECK rollback "$AUTO_ID" 2>&1 >/dev/null
+assert_eq "$(cat f.txt)" "v3-unsaved" "rollback to <auto> restores unsaved state"
+
+# ============================================================
+echo "=== Rollback smart auto (skip duplicate) ==="
+# ============================================================
+
+DIR=$(new_test_dir)
+cd "$DIR"
+echo "v1" > f.txt
+$CHECK --note "snap1" >/dev/null 2>&1
+echo "v2" > f.txt
+$CHECK --note "snap2" >/dev/null 2>&1
+
+# Rollback to #1 — current state matches snap2, so <auto> should be skipped
+OUT=$($CHECK rollback 1 2>&1)
+assert_eq "$(cat f.txt)" "v1" "smart auto rollback restores content"
+# <auto> should NOT appear since current state == snap2
+OUT=$($CHECK list 2>&1)
+if echo "$OUT" | grep -qF "<auto>"; then
+    fail "smart auto skips duplicate" "<auto> should not appear"
+else
+    pass "smart auto skips duplicate"
+fi
+
+# ============================================================
+echo "=== Rollback only one <auto> ==="
+# ============================================================
+
+DIR=$(new_test_dir)
+cd "$DIR"
+echo "v1" > f.txt
+$CHECK --note "snap1" >/dev/null 2>&1
+echo "v2" > f.txt
+$CHECK --note "snap2" >/dev/null 2>&1
+echo "v3-dirty" > f.txt
+
+# First rollback creates <auto>
+$CHECK rollback 1 2>&1 >/dev/null
+echo "v4-dirty" > f.txt
+# Second rollback should replace old <auto>, not create a second one
+$CHECK rollback 2 2>&1 >/dev/null
+
+OUT=$($CHECK list 2>&1)
+AUTO_COUNT=$(echo "$OUT" | grep -cF "<auto>" || true)
+assert_eq "$AUTO_COUNT" "1" "only one <auto> exists after multiple rollbacks"
+
+# ============================================================
+echo "=== Rollback defaults to latest ==="
+# ============================================================
+
+DIR=$(new_test_dir)
+cd "$DIR"
+echo "v1" > f.txt
+$CHECK --note "snap1" >/dev/null 2>&1
+echo "v2" > f.txt
+$CHECK --note "snap2" >/dev/null 2>&1
+echo "v3-dirty" > f.txt
+
+OUT=$($CHECK rollback 2>&1)
+assert_contains "$OUT" "rolled back to latest" "rollback defaults to latest"
+assert_eq "$(cat f.txt)" "v2" "rollback latest restores snap2 content"
+
+# ============================================================
+echo "=== Remove ==="
 # ============================================================
 
 DIR=$(new_test_dir)
@@ -151,20 +238,26 @@ $CHECK --note "snap2" >/dev/null 2>&1
 echo "v3" > f.txt
 $CHECK --note "snap3" >/dev/null 2>&1
 
-OUT=$($CHECK undo 2>&1)
-assert_contains "$OUT" "undone to #2" "undo message"
-assert_eq "$(cat f.txt)" "v2" "undo restores previous content"
+OUT=$($CHECK remove 2 2>&1)
+assert_contains "$OUT" "removed #2" "remove message"
 
-# ============================================================
-echo "=== Undo with single checkpoint ==="
-# ============================================================
+# verify #2 is gone from list
+OUT=$($CHECK list 2>&1)
+if echo "$OUT" | grep -qF "snap2"; then
+    fail "remove deletes checkpoint" "snap2 still listed"
+else
+    pass "remove deletes checkpoint"
+fi
+assert_contains "$OUT" "snap1" "remove keeps other checkpoints (snap1)"
+assert_contains "$OUT" "snap3" "remove keeps other checkpoints (snap3)"
 
-DIR=$(new_test_dir)
-cd "$DIR"
-echo "only" > f.txt
-$CHECK >/dev/null 2>&1
+# remove requires id
+# remove without args shows usage (exit 0)
+OUT=$($CHECK remove 2>&1)
+assert_contains "$OUT" "check remove" "remove without args shows usage in remove section"
 
-assert_exit_fail "cd $DIR && $CHECK undo" "undo with single checkpoint fails"
+# remove nonexistent
+assert_exit_fail "cd $DIR && $CHECK remove 99" "remove nonexistent checkpoint fails"
 
 # ============================================================
 echo "=== List --recent ==="
@@ -193,7 +286,7 @@ assert_contains "$OUT" "snap1" "full list shows oldest"
 assert_contains "$OUT" "snap5" "full list shows newest"
 
 # ============================================================
-echo "=== Cleanup --keep ==="
+echo "=== Remove --keep ==="
 # ============================================================
 
 DIR=$(new_test_dir)
@@ -203,22 +296,22 @@ for i in 1 2 3 4 5; do
     $CHECK --note "snap$i" >/dev/null 2>&1
 done
 
-OUT=$($CHECK cleanup --keep 2 2>&1)
-assert_contains "$OUT" "removed 3" "cleanup removes correct count"
-assert_contains "$OUT" "kept last 2" "cleanup reports kept count"
+OUT=$($CHECK remove --keep 2 2>&1)
+assert_contains "$OUT" "removed 3" "remove --keep removes correct count"
+assert_contains "$OUT" "kept last 2" "remove --keep reports kept count"
 
 # verify only last 2 remain in list
 OUT=$($CHECK list 2>&1)
-assert_contains "$OUT" "snap5" "cleanup keeps snap5"
-assert_contains "$OUT" "snap4" "cleanup keeps snap4"
+assert_contains "$OUT" "snap5" "remove --keep keeps snap5"
+assert_contains "$OUT" "snap4" "remove --keep keeps snap4"
 if echo "$OUT" | grep -qF "snap3"; then
-    fail "cleanup removes old checkpoints" "snap3 still listed"
+    fail "remove --keep removes old checkpoints" "snap3 still listed"
 else
-    pass "cleanup removes old checkpoints"
+    pass "remove --keep removes old checkpoints"
 fi
 
 # ============================================================
-echo "=== Cleanup safety ==="
+echo "=== Remove --keep safety ==="
 # ============================================================
 
 DIR=$(new_test_dir)
@@ -226,12 +319,53 @@ cd "$DIR"
 echo "x" > f.txt
 $CHECK >/dev/null 2>&1
 
-assert_exit_fail "cd $DIR && $CHECK cleanup" "cleanup without --keep fails"
-assert_exit_fail "cd $DIR && $CHECK cleanup --keep 0" "cleanup --keep 0 fails"
+assert_exit_fail "cd $DIR && $CHECK remove --keep 0" "remove --keep 0 fails"
 
 # nothing to clean
-OUT=$($CHECK cleanup --keep 10 2>&1)
-assert_contains "$OUT" "nothing to clean" "cleanup when nothing to do"
+OUT=$($CHECK remove --keep 10 2>&1)
+assert_contains "$OUT" "nothing to clean" "remove --keep when nothing to do"
+
+# ============================================================
+echo "=== Remove usage ==="
+# ============================================================
+
+DIR=$(new_test_dir)
+cd "$DIR"
+echo "x" > f.txt
+$CHECK >/dev/null 2>&1
+
+OUT=$($CHECK remove 2>&1)
+assert_contains "$OUT" "check remove" "remove without args shows usage"
+
+# ============================================================
+echo "=== Remove all ==="
+# ============================================================
+
+DIR=$(new_test_dir)
+cd "$DIR"
+for i in 1 2 3; do
+    echo "v$i" > f.txt
+    $CHECK --note "snap$i" >/dev/null 2>&1
+done
+
+# remove all with "y" confirmation
+OUT=$(echo "y" | $CHECK remove all 2>&1)
+assert_contains "$OUT" "removed all 3" "remove all confirms and removes"
+
+# list should show no checkpoints
+OUT=$($CHECK list 2>&1)
+assert_contains "$OUT" "no checkpoints" "no checkpoints after remove all"
+
+# remove all with "n" should abort
+DIR=$(new_test_dir)
+cd "$DIR"
+echo "x" > f.txt
+$CHECK >/dev/null 2>&1
+OUT=$(echo "n" | $CHECK remove all 2>&1)
+assert_contains "$OUT" "aborted" "remove all aborts on n"
+# checkpoint should still exist
+OUT=$($CHECK list 2>&1)
+assert_contains "$OUT" "#1" "checkpoint survives abort"
 
 # ============================================================
 echo "=== Empty file ==="
@@ -242,8 +376,8 @@ cd "$DIR"
 touch empty.txt
 $CHECK >/dev/null 2>&1
 echo "now has content" > empty.txt
-$CHECK restore 1 2>&1 >/dev/null
-assert_eq "$(cat empty.txt)" "" "restore empty file"
+$CHECK rollback 1 2>&1 >/dev/null
+assert_eq "$(cat empty.txt)" "" "rollback empty file"
 
 # ============================================================
 echo "=== Binary file roundtrip ==="
@@ -256,7 +390,7 @@ cp binary.bin binary_orig.bin
 $CHECK >/dev/null 2>&1
 
 dd if=/dev/urandom of=binary.bin bs=1024 count=50 2>/dev/null
-$CHECK restore 1 2>&1 >/dev/null
+$CHECK rollback 1 2>&1 >/dev/null
 assert_file_eq binary.bin binary_orig.bin "binary file roundtrip"
 
 # ============================================================
@@ -271,12 +405,12 @@ echo "mid" > a/b/mid.txt
 $CHECK >/dev/null 2>&1
 
 rm -rf a
-$CHECK restore 1 2>&1 >/dev/null
-assert_eq "$(cat a/b/c/d/file.txt)" "deep" "restore deep nested file"
-assert_eq "$(cat a/b/mid.txt)" "mid" "restore mid nested file"
+$CHECK rollback 1 2>&1 >/dev/null
+assert_eq "$(cat a/b/c/d/file.txt)" "deep" "rollback deep nested file"
+assert_eq "$(cat a/b/mid.txt)" "mid" "rollback mid nested file"
 
 # ============================================================
-echo "=== Multiple checkpoints restore ==="
+echo "=== Multiple checkpoints rollback ==="
 # ============================================================
 
 DIR=$(new_test_dir)
@@ -288,12 +422,12 @@ $CHECK >/dev/null 2>&1
 echo "v3" > f.txt
 $CHECK >/dev/null 2>&1
 
-$CHECK restore 1 2>&1 >/dev/null
-assert_eq "$(cat f.txt)" "v1" "restore to snap 1"
-$CHECK restore 2 2>&1 >/dev/null
-assert_eq "$(cat f.txt)" "v2" "restore to snap 2"
-$CHECK restore 3 2>&1 >/dev/null
-assert_eq "$(cat f.txt)" "v3" "restore to snap 3"
+$CHECK rollback 1 2>&1 >/dev/null
+assert_eq "$(cat f.txt)" "v1" "rollback to snap 1"
+$CHECK rollback 2 2>&1 >/dev/null
+assert_eq "$(cat f.txt)" "v2" "rollback to snap 2"
+$CHECK rollback 3 2>&1 >/dev/null
+assert_eq "$(cat f.txt)" "v3" "rollback to snap 3"
 
 # ============================================================
 echo "=== No checkpoints error ==="
@@ -301,26 +435,10 @@ echo "=== No checkpoints error ==="
 
 DIR=$(new_test_dir)
 cd "$DIR"
-assert_exit_fail "cd $DIR && $CHECK restore" "restore with no checkpoints"
+assert_exit_fail "cd $DIR && $CHECK rollback" "rollback with no checkpoints"
 assert_exit_fail "cd $DIR && $CHECK diff" "diff with no checkpoints"
 assert_exit_fail "cd $DIR && $CHECK list" "list with no checkpoints"
-assert_exit_fail "cd $DIR && $CHECK undo" "undo with no checkpoints"
-
-# ============================================================
-echo "=== .checkignore ==="
-# ============================================================
-
-DIR=$(new_test_dir)
-cd "$DIR"
-echo "*.log" > .checkignore
-echo "important" > keep.txt
-echo "debug output" > debug.log
-$CHECK >/dev/null 2>&1
-
-rm keep.txt debug.log
-$CHECK restore 1 2>&1 >/dev/null
-[ -f keep.txt ] && pass "checkignore keeps non-ignored" || fail "checkignore keeps non-ignored" "keep.txt missing"
-[ ! -f debug.log ] && pass "checkignore ignores *.log" || fail "checkignore ignores *.log" "debug.log was restored"
+assert_exit_fail "cd $DIR && $CHECK remove 1" "remove with no checkpoints"
 
 # ============================================================
 echo "=== List shows checkpoint path ==="
