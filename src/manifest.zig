@@ -87,7 +87,7 @@ pub fn read(allocator: std.mem.Allocator, dir: std.fs.Dir, id: u32) !Manifest {
 }
 
 pub fn readHead(dir: std.fs.Dir) !?u32 {
-    const file = dir.openFile("HEAD", .{}) catch |err| {
+    const file = dir.openFile("latest", .{}) catch |err| {
         if (err == error.FileNotFound) return null;
         return err;
     };
@@ -104,9 +104,9 @@ pub fn writeHead(dir: std.fs.Dir, id: u32) !void {
     var buf: [32]u8 = undefined;
     const content = std.fmt.bufPrint(&buf, "{d}\n", .{id}) catch unreachable;
 
-    const tmp = try dir.createFile("HEAD.tmp", .{});
+    const tmp = try dir.createFile("latest.tmp", .{});
     try tmp.writeAll(content);
     tmp.close();
 
-    try dir.rename("HEAD.tmp", "HEAD");
+    try dir.rename("latest.tmp", "latest");
 }

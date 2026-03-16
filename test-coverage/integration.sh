@@ -79,6 +79,32 @@ OUT=$($CHECK list 2>&1)
 assert_contains "$OUT" "my note" "list shows note"
 
 # ============================================================
+echo "=== Note ==="
+# ============================================================
+
+DIR=$(new_test_dir)
+cd "$DIR"
+echo "a" > f.txt
+$CHECK >/dev/null 2>&1
+echo "b" > f.txt
+$CHECK >/dev/null 2>&1
+
+# Add note to existing checkpoint
+OUT=$($CHECK note 1 "first version" 2>&1)
+assert_contains "$OUT" '"first version"' "note output"
+
+OUT=$($CHECK list 2>&1)
+assert_contains "$OUT" "first version" "list shows added note"
+
+# Update existing note
+$CHECK note 1 "updated" 2>&1 >/dev/null
+OUT=$($CHECK list 2>&1)
+assert_contains "$OUT" "updated" "note can be updated"
+
+# Note on nonexistent checkpoint
+assert_exit_fail "cd $DIR && $CHECK note 99 'nope'" "note on nonexistent fails"
+
+# ============================================================
 echo "=== Version ==="
 # ============================================================
 

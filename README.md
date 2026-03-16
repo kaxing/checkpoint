@@ -1,6 +1,6 @@
 # Checkpoint — the `check` command you don't know you need
 
-Fast, snapshot-based checkpoints for entire codebase. No branches, no staging, no merge conflicts.
+Fast checkpoints for entire codebase. No branches, no staging, no merge conflicts.
 
 ## Install
 
@@ -25,12 +25,15 @@ Requires: Zig 0.15+
 ```
 check                       create checkpoint
 check --note "message"      create checkpoint with a note
-check rollback [id]         rollback to checkpoint (default: latest)
-check diff [id]             show added/removed/modified files
-check diff [id] <path>      show content diff for one file
-check list [--recent N]     show all (or last N) checkpoints
+check rollback              rollback to latest checkpoint
+check rollback <id>         rollback to a specific checkpoint
+check diff <id>             show added/removed/modified files
+check diff <id> <path>      show content diff for one file
+check list                  show all checkpoints
+check list --recent <N>     show last N checkpoints
+check note <id> "message"   add or update a note
 check remove <id>           remove a checkpoint
-check remove --keep N       delete all but last N
+check remove --keep <N>     delete all but last N
 check remove all            remove all checkpoints
 check version               show version
 ```
