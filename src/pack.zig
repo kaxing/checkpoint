@@ -4,6 +4,8 @@ const comp = @import("compress.zig");
 
 const Hash = hash_mod.Hash;
 const HashContext = hash_mod.HashContext;
+const Io = std.Io;
+const File = Io.File;
 
 const ENTRY_HEADER_SIZE = 40;
 
@@ -14,13 +16,14 @@ pub const PackEntry = struct {
 };
 
 pub const Pack = struct {
-    file: std.fs.File,
+    file: File,
     index: std.HashMap(Hash, PackEntry, HashContext, 80),
     allocator: std.mem.Allocator,
+    io: Io,
     write_pos: u64, // track position to avoid stat() on every write
 
-    pub fn init(allocator: std.mem.Allocator, dir: std.fs.Dir) !Pack {
-        const file = dir.createFile("pack.dat", .{
+    pub fn init(allocator: std.mem.Allocator, dir: Io.Dir, io: Io) !Pack {
+        const file = dir.createFile(io, "pack.dat", .{
             .read = true,
             .truncate = false,
             .exclusive = false,
@@ -30,6 +33,7 @@ pub const Pack = struct {
             .file = file,
             .index = std.HashMap(Hash, PackEntry, HashContext, 80).init(allocator),
             .allocator = allocator,
+            .io = io,
             .write_pos = 0,
         };
 
@@ -38,18 +42,18 @@ pub const Pack = struct {
     }
 
     pub fn deinit(self: *Pack) void {
-        self.file.close();
+        self.file.close(self.io);
         self.index.deinit();
     }
 
     fn buildIndex(self: *Pack) !void {
-        const stat = try self.file.stat();
+        const stat = try self.file.stat(self.io);
         const file_size = stat.size;
         var pos: u64 = 0;
 
         while (pos + ENTRY_HEADER_SIZE <= file_size) {
             var header_buf: [ENTRY_HEADER_SIZE]u8 = undefined;
-            const n = try self.file.pread(&header_buf, pos);
+            const n = try self.file.readPositionalAll(self.io, &header_buf, pos);
             if (n < ENTRY_HEADER_SIZE) break;
 
             const h: Hash = header_buf[0..32].*;
@@ -88,14 +92,13 @@ pub const Pack = struct {
 
     fn appendEntry(self: *Pack, h: Hash, compressed: []const u8, raw_len: u32) !void {
         const offset = self.write_pos;
-        try self.file.seekTo(offset);
 
         var header: [ENTRY_HEADER_SIZE]u8 = undefined;
         @memcpy(header[0..32], &h);
         std.mem.writeInt(u32, header[32..36], @intCast(compressed.len), .little);
         std.mem.writeInt(u32, header[36..40], raw_len, .little);
-        try self.file.writeAll(&header);
-        try self.file.writeAll(compressed);
+        try self.file.writePositionalAll(self.io, &header, offset);
+        try self.file.writePositionalAll(self.io, compressed, offset + ENTRY_HEADER_SIZE);
 
         self.write_pos = offset + ENTRY_HEADER_SIZE + compressed.len;
 
@@ -116,7 +119,7 @@ pub const Pack = struct {
         const compressed = try self.allocator.alloc(u8, entry.compressed_len);
         defer self.allocator.free(compressed);
 
-        const n = try self.file.pread(compressed, entry.offset + ENTRY_HEADER_SIZE);
+        const n = try self.file.readPositionalAll(self.io, compressed, entry.offset + ENTRY_HEADER_SIZE);
         if (n < entry.compressed_len) return error.UnexpectedEof;
 
         const raw = try comp.decompress(self.allocator, compressed, entry.raw_len);

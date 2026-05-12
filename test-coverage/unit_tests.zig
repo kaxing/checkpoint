@@ -235,7 +235,7 @@ test "chunk hash compress decompress roundtrip" {
     const original = "Hello, world! This is a test of the chunking pipeline. " ** 100;
 
     var cdc = chunker_mod.FastCDC.init(original, .{});
-    var reconstructed: std.ArrayList(u8) = .{};
+    var reconstructed: std.ArrayList(u8) = .{ .items = &.{}, .capacity = 0 };
     defer reconstructed.deinit(allocator);
 
     while (cdc.next()) |chunk| {

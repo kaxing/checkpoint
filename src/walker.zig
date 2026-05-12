@@ -1,5 +1,8 @@
 const std = @import("std");
 
+const Io = std.Io;
+const Dir = Io.Dir;
+
 pub const WalkEntry = struct {
     path: []const u8, // relative to root, owned
     size: u64,
@@ -12,10 +15,10 @@ pub const Walker = struct {
     ignore_patterns: std.ArrayList([]const u8),
     patterns_start: usize, // index where dynamically allocated patterns begin
 
-    pub fn init(allocator: std.mem.Allocator, root: std.fs.Dir) !Walker {
+    pub fn init(allocator: std.mem.Allocator, root: Dir, io: Io) !Walker {
         var w = Walker{
             .allocator = allocator,
-            .ignore_patterns = .{},
+            .ignore_patterns = .{ .items = &.{}, .capacity = 0 },
             .patterns_start = 0,
         };
 
@@ -25,7 +28,7 @@ pub const Walker = struct {
         w.patterns_start = w.ignore_patterns.items.len;
 
         // Load .gitignore
-        w.loadIgnoreFile(root, ".gitignore") catch {};
+        w.loadIgnoreFile(root, io, ".gitignore") catch {};
 
         return w;
     }
@@ -37,11 +40,8 @@ pub const Walker = struct {
         self.ignore_patterns.deinit(self.allocator);
     }
 
-    fn loadIgnoreFile(self: *Walker, dir: std.fs.Dir, name: []const u8) !void {
-        const file = try dir.openFile(name, .{});
-        defer file.close();
-
-        const content = try file.readToEndAlloc(self.allocator, 1024 * 1024);
+    fn loadIgnoreFile(self: *Walker, dir: Dir, io: Io, name: []const u8) !void {
+        const content = try dir.readFileAlloc(io, name, self.allocator, .limited(1024 * 1024));
         defer self.allocator.free(content);
 
         var iter = std.mem.splitScalar(u8, content, '\n');
@@ -49,7 +49,7 @@ pub const Walker = struct {
             const trimmed = std.mem.trim(u8, line, " \t\r");
             if (trimmed.len == 0 or trimmed[0] == '#' or trimmed[0] == '!') continue;
 
-            const pattern = std.mem.trimRight(u8, trimmed, "/");
+            const pattern = std.mem.trimEnd(u8, trimmed, "/");
             if (pattern.len == 0) continue;
 
             const owned = try self.allocator.dupe(u8, pattern);
@@ -57,8 +57,8 @@ pub const Walker = struct {
         }
     }
 
-    pub fn walk(self: *Walker, root: std.fs.Dir) ![]WalkEntry {
-        var entries: std.ArrayList(WalkEntry) = .{};
+    pub fn walk(self: *Walker, root: Dir, io: Io) ![]WalkEntry {
+        var entries: std.ArrayList(WalkEntry) = .{ .items = &.{}, .capacity = 0 };
         errdefer {
             for (entries.items) |e| self.allocator.free(e.path);
             entries.deinit(self.allocator);
@@ -67,17 +67,20 @@ pub const Walker = struct {
         var iter = try root.walk(self.allocator);
         defer iter.deinit();
 
-        while (try iter.next()) |entry| {
+        while (try iter.next(io)) |entry| {
             if (entry.kind != .file) continue;
             if (self.isIgnored(entry.path)) continue;
 
             const path = try self.allocator.dupe(u8, entry.path);
-            const stat = root.statFile(entry.path) catch continue;
+            const stat = root.statFile(io, entry.path, .{}) catch {
+                self.allocator.free(path);
+                continue;
+            };
 
             try entries.append(self.allocator, .{
                 .path = path,
                 .size = stat.size,
-                .mtime_ns = stat.mtime,
+                .mtime_ns = stat.mtime.nanoseconds,
                 .mode = 0o100644,
             });
         }

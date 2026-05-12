@@ -11,11 +11,12 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            .error_tracing = false,
         }),
     });
 
     const zstd_dep = b.dependency("zstd", .{ .target = target, .optimize = optimize });
-    exe.linkLibrary(zstd_dep.artifact("zstd"));
+    exe.root_module.linkLibrary(zstd_dep.artifact("zstd"));
 
     b.installArtifact(exe);
 
